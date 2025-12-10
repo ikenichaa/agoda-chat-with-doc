@@ -1,4 +1,5 @@
 import asyncio
+from importlib.metadata import files
 import chainlit as cl
 import logging
 
@@ -11,21 +12,46 @@ logging.basicConfig(level=logging.INFO)
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
 
 
-async def process_file_background(f):
-    # This runs in the background after on_chat_start returns
-    try:
-        loader = DoclingLoader(f.path)
-        async_load = cl.make_async(loader.load)
-        docs = await async_load()
-        logging.info(f"Docs({f.name}): {len(docs)} documents")
-        await cl.Message(
-            content=f"✅ Finished processing **{f.name}**.\n• Extracted documents: **{len(docs)}**"
-        ).send()
-    except Exception as e:
-        logging.exception("Error processing file in background")
-        await cl.Message(
-            content=f"❌ Failed processing **{f.name}**: `{e}`"
-        ).send()
+
+def load_docs_sync(path: str):
+    loader = DoclingLoader(path)
+    return loader.load()
+
+
+
+async def process_files_stepwise(files):
+    # Example: three steps with per-file work & progress messages
+    # STEP 1: Parse PDFs
+    step1_msg = await cl.Message(content="⏳ Step 1/3: Parsing PDFs…").send()
+    parsed = []
+    for f in files:
+        await cl.Message(content=f"⏳ Parsing **{f.name}**…").send()
+        docs = await cl.make_async(load_docs_sync)(f.path)  # offload blocking work
+        parsed.append((f, docs))
+        # await cl.Message(content=f"✅ Parsed **{f.name}**").send()
+        await cl.Message(content=f"✅ Parsed **{f.name}** → {len(docs)} document(s)").send()
+    
+    
+    step1_msg.content = "✅ Step 1/3: Parsing complete."
+    await step1_msg.update()
+
+
+    # STEP 2: Chunking (illustrative)
+    # step2_msg = await cl.Message(content="✂️ Step 2/3: Chunking documents…").send()
+    # chunked = []
+    # for f, docs in parsed:
+    #     # … your chunking logic …
+    #     chunked.append((f, docs))
+    #     await cl.Message(content=f"✅ Chunked **{f.name}**").send()
+    # await step2_msg.update(content="✅ Step 2/3: Chunking complete.")
+
+    # STEP 3: Embeddings / Index
+    # step3_msg = await cl.Message(content="🧠 Step 3/3: Creating embeddings & index…").send()
+    # # … create embeddings/vector store asynchronously …
+    # await cl.Message(content="✅ Index ready. You can start asking questions!").send()
+    # await step3_msg.update(content="✅ Step 3/3 complete.")
+
+
 
 
 @cl.on_chat_start
@@ -37,29 +63,18 @@ async def start():
             content="Please upload 1 to 3 PDF files to begin!", accept=["application/pdf"], max_files=3
         ).send()
 
-    
-    logging.info(f"Processing {len(files)} uploaded files.")
-    for f in files:
-        logging.info(f"Queued file: {f.name}")
-        await cl.Message(content=f"✅ Received file: {f.name}\n⏳ Processing in background…").send()
-        # Schedule without awaiting (fire-and-forget)
-        asyncio.create_task(process_file_background(f))
+    await cl.Message(content=f"⏳ Received {len(files)} file(s). Processing…").send()
 
-    # Optionally send a final note right away
-    await cl.Message("👍 You can continue chatting—I'll notify you as each file finishes.").send()
+    # Kick off processing
+    processing_task = asyncio.create_task(process_files_stepwise(files))
 
 
-    #     # Step 2: Chunk with HybridChunker
-    #     chunker = HybridChunker()
-    #     chunks = chunker.split_documents(docs)
+    # Wait for processing to finish first, then for the user to click
+    await processing_task
+    await cl.Message(content="✅ Processing complete.").send()
 
-    #     # Step 3: Display chunks and metadata
-    #     for i, chunk in enumerate(chunks[:5]):  # show first 5 chunks for brevity
-    #         await cl.Message(
-    #             content=f"**Chunk {i+1}:**\n{chunk.page_content}\n\n**Metadata:** {chunk.metadata}"
-    #         ).send()
+    await cl.Message(content="You can now start chatting with your documents!").send()
 
-    # await cl.Message("✨ All files processed and chunked!").send()
 
 
 @cl.on_message
