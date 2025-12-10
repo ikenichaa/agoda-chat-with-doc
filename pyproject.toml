@@ -1,0 +1,14 @@
+[project]
+name = "agoda-chat-with-doc"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chainlit>=2.9.3",
+    "docling>=2.64.1",
+    "langchain>=1.1.3",
+    "langchain-community>=0.4.1",
+    "langchain-docling>=2.0.0",
+    "langchain-google-genai>=4.0.0",
+]
