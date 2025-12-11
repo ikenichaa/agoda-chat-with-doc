@@ -1,5 +1,3 @@
-import asyncio
-from importlib.metadata import files
 import chainlit as cl
 import logging
 
@@ -9,7 +7,7 @@ from langchain_docling import DoclingLoader
 from langchain_milvus import Milvus
 from docling.chunking import HybridChunker
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 EMBED_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
@@ -19,103 +17,128 @@ embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
 
 
 def load_docs_and_chunk(path: str):
+    """
+    load_docs_and_chunk use docling to load and chunk documents to get the docling docs
+    
+    :param path: path to the document
+    :type path: str
+    """
     loader = DoclingLoader(path, chunker=HybridChunker(tokenizer=EMBED_MODEL_ID))
     return loader.load()
 
 
-async def process_files_stepwise(files):
-    # STEP 1: Parse and chunk PDFs
-    step1_msg = await cl.Message(content="⏳ Step 1/2: Parsing and Chunking PDFs…").send()
+async def parse_and_chunk_files(files):
+    """
+    Parse and chunk PDF files into document chunks.
     
-    # Initialize list to hold results *per file* (for source tracking)
-    parsed_files_data = [] 
+    :param files: List of uploaded file objects
+    :return: List of all document chunks across all files
+    """
+    step_msg = await cl.Message(content="⏳ Step 1/2: Parsing and Chunking PDFs…").send()
     
-    # Initialize list to hold all chunks *combined* (for batch ingestion)
     all_chunks = []
-    
     for f in files:
-        await cl.Message(content=f"⏳ Parsing and chunking **{f.name}**…").send()
+        parse_msg = await cl.Message(content=f"⏳ Parsing and chunking **{f.name}**…").send()
         
-        # Load and chunk the file. This should return a list of LangChain Documents.
-        # Ensure load_docs_and_chunk handles the DoclingLoader with HybridChunker.
-        docs = await cl.make_async(load_docs_and_chunk)(f.path)  # Offload blocking work
-        
-        # Store results for source tracking
-        parsed_files_data.append((f, docs))
-        
-        # Aggregate all chunks into the master list
+        docs = await cl.make_async(load_docs_and_chunk)(f.path)
         all_chunks.extend(docs)
-        
-        await cl.Message(content=f"✅ Parsed **{f.name}** → {len(docs)} document chunks").send()
-    
-    # Final update on the step
-    step1_msg.content = f"✅ Step 1/2: Parsing and chunking complete. Total chunks: {len(all_chunks)}"
-    await step1_msg.update()
 
-    # Log a few examples from the master list
-    logging.info(f"--- Sample of first 3 chunks (Total: {len(all_chunks)}) ---")
+        parse_msg.content = f"✅ Finish parsing and chunking **{f.name}** → {len(docs)} document chunks" 
+        await parse_msg.update()
+    
+    step_msg.content = f"✅ Step 1/2: Parsing and chunking complete. Total chunks: {len(all_chunks)}"
+    await step_msg.update()
+    
+    # Log samples
+    logging.debug(f"--- Sample of first 3 chunks (Total: {len(all_chunks)}) ---")
     for i, d in enumerate(all_chunks[:3]):
-        # Using repr(d.page_content) is cleaner for logging strings
-        logging.info(f"Chunk {i+1}: {repr(d.page_content[:50] + '...')}") 
-        logging.info(f"Source: {d.metadata.get('source', 'N/A')}")
+        logging.debug(f"Chunk {i+1}: {repr(d.page_content[:50] + '...')}") 
+        logging.debug(f"Source: {d.metadata.get('source', 'N/A')}")
     
-    # At this point, you can use:
-    # 1. `all_chunks` for batch ingestion into a single vector store.
-    # 2. `parsed_files_data` if you need to access chunks grouped by their original file.
+    return all_chunks
 
-    # STEP 2: Ingest all chunks into a single Chroma collection
-    step2_msg = await cl.Message(content="⏳ Step 2/2: Ingesting chunks into vector store…").send()
-    milvus_conn_args = {
-        "uri": MILVUS_URI,
-    }
 
-    vectorstore = Milvus.from_documents(
-        documents=all_chunks,
+async def ingest_to_vectorstore(chunks):
+    """
+    Ingest document chunks into Milvus vector store.
+    
+    :param chunks: List of document chunks to ingest
+    :return: Configured vector store instance
+    """
+    step_msg = await cl.Message(content="⏳ Step 2/2: Ingesting chunks into vector store…").send()
+    
+    milvus_conn_args = {"uri": MILVUS_URI}
+    
+    vectorstore = await cl.make_async(Milvus.from_documents)(
+        documents=chunks,
         embedding=embedding,
         collection_name=COLLECTION_NAME,
         connection_args=milvus_conn_args,
         index_params={"index_type": "IVF_FLAT", "metric_type": "L2"},
         drop_old=True,
     )
-
-
     
-    step2_msg.content = f"✅ Step 2/2: Ingesting chunks into vector store completed."
-    await step2_msg.update()
+    step_msg.content = f"✅ Step 2/2: Successfully ingested {len(chunks)} chunks into vector store."
+    await step_msg.update()
     
     return vectorstore
 
 
-
-
 @cl.on_chat_start
 async def start():
+    """
+    This function is called when the chat starts. It prompts the user to upload PDF files,
+    processes the files, and sets up the vector store and LLM in the user session.
+    """
     files = None
-    # Wait for the user to upload a file
     while files == None:
         files = await cl.AskFileMessage(
             content="Please upload 1 to 3 PDF files to begin!", accept=["application/pdf"], max_files=3
         ).send()
 
-    await cl.Message(content=f"⏳ Received {len(files)} file(s). Processing…").send()
+    processing_msg = await cl.Message(content=f"⏳ Received {len(files)} file(s). Processing…").send()
 
-    # Kick off processing
-    processing_task = asyncio.create_task(process_files_stepwise(files))
+    # Step 1: Parse and chunk
+    all_chunks = await parse_and_chunk_files(files)
 
+    # Step 2: Ingest to vector store
+    vector_store = await ingest_to_vectorstore(all_chunks)
 
-    # Wait for processing to finish first, then for the user to click
-    vectorstore = await processing_task
+    processing_msg.content = "✅ All processing complete!"
+    await processing_msg.update()
 
     # Store the retrievers in the Chainlit user session
-    cl.user_session.set("retriever_global", vectorstore.as_retriever(search_kwargs={"k": 5}))
+    cl.user_session.set("vector_store", vector_store.as_retriever(search_kwargs={"k": 5}))
     
-    # Initialize your LLM
+    # Initialize the LLM and store in user session
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
     cl.user_session.set("llm", llm)
     
+    # Notify user that setup is complete
     await cl.Message(content="Setup complete! Ready to chat.").send()
 
-
+def log_retrieved_docs(retrieved_docs):
+    """
+    Log the content and metadata of retrieved document chunks.
+    
+    :param retrieved_docs: List of retrieved document chunks
+    """
+    logging.debug("--- Retrieved Document Chunks (Context) ---")
+    for i, doc in enumerate(retrieved_docs):
+        # Print the source file path (from metadata) and a snippet of the content
+        source_file = doc.metadata.get('source', 'N/A')
+        
+        # Strip out complex metadata to make the output clean and readable
+        metadata_keys = ", ".join([
+            f"{k}:{v}" for k, v in doc.metadata.items() if isinstance(v, (str, int, float, bool)) and k != 'source'
+        ])
+        
+        logging.debug("-" * 40)
+        logging.debug(f"Chunk {i + 1}:")
+        logging.debug(f"  Source File: {source_file}")
+        if metadata_keys:
+            logging.debug(f"  Metadata: {metadata_keys}")
+        logging.debug(f"  Content Snippet: {doc.page_content[:200]}...")
 
 @cl.on_message
 async def on_message(msg: cl.Message):
@@ -126,33 +149,14 @@ async def on_message(msg: cl.Message):
         await cl.Message(content="LLM not initialized. Please wait for setup to complete.").send()
         return
     
-    # 1. Load the necessary components from the session
-    retriever_global = cl.user_session.get("retriever_global")
+    vector_store = cl.user_session.get("vector_store")
+    retrieved_docs = vector_store.invoke(msg.content)
 
-    retrieved_docs = retriever_global.invoke(msg.content)
+    logging.info(f"\n✅ Retrieved {len(retrieved_docs)} relevant document chunks.")
+    log_retrieved_docs(retrieved_docs)
 
-    print(f"\n✅ Retrieved {len(retrieved_docs)} relevant document chunks.")
+    # Further processing with LLM and retrieved_docs can be done here
+    llm = cl.user_session.get("llm")
 
-    # 4. Display the content and metadata of the retrieved chunks
-    print("\n--- Retrieved Document Chunks (Context) ---")
-    for i, doc in enumerate(retrieved_docs):
-        # Print the source file path (from metadata) and a snippet of the content
-        source_file = doc.metadata.get('source', 'N/A')
         
-        # We strip out complex metadata to make the output clean and readable
-        # (Since Docling adds a lot of rich metadata)
-        metadata_keys = ", ".join([
-            f"{k}:{v}" for k, v in doc.metadata.items() if isinstance(v, (str, int, float, bool)) and k != 'source'
-        ])
-        
-        print("-" * 40)
-        print(f"Chunk {i + 1}:")
-        print(f"  Source File: {source_file}")
-        if metadata_keys:
-            print(f"  Metadata: {metadata_keys}")
-        print(f"  Content Snippet: {doc.page_content[:200]}...")
-    
-    
-    
-    # 5. Send the response
-    # await cl.Message(content=response.content).send()
+
