@@ -6,13 +6,15 @@ import logging
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_docling import DoclingLoader
-from langchain_community.vectorstores import Chroma
+from langchain_milvus import Milvus
 from docling.chunking import HybridChunker
 
 logging.basicConfig(level=logging.INFO)
 
 
 EMBED_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+MILVUS_URI = "http://localhost:19530" 
+COLLECTION_NAME = "docling_rag_index"
 embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
 
 
@@ -63,16 +65,25 @@ async def process_files_stepwise(files):
 
     # STEP 2: Ingest all chunks into a single Chroma collection
     step2_msg = await cl.Message(content="⏳ Step 2/2: Ingesting chunks into vector store…").send()
-    chroma_global = Chroma.from_documents(
+    milvus_conn_args = {
+        "uri": MILVUS_URI,
+    }
+
+    vectorstore = Milvus.from_documents(
         documents=all_chunks,
         embedding=embedding,
-        collection_name="index_global"
+        collection_name=COLLECTION_NAME,
+        connection_args=milvus_conn_args,
+        index_params={"index_type": "IVF_FLAT", "metric_type": "L2"},
+        drop_old=True,
     )
+
+
     
     step2_msg.content = f"✅ Step 2/2: Ingesting chunks into vector store completed."
     await step2_msg.update()
     
-    return chroma_global
+    return vectorstore
 
 
 
@@ -93,10 +104,10 @@ async def start():
 
 
     # Wait for processing to finish first, then for the user to click
-    chroma_global = await processing_task
+    vectorstore = await processing_task
 
     # Store the retrievers in the Chainlit user session
-    cl.user_session.set("retriever_global", chroma_global.as_retriever())
+    cl.user_session.set("retriever_global", vectorstore.as_retriever(search_kwargs={"k": 5}))
     
     # Initialize your LLM
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
@@ -117,23 +128,31 @@ async def on_message(msg: cl.Message):
     
     # 1. Load the necessary components from the session
     retriever_global = cl.user_session.get("retriever_global")
-    
-    # 2. **RETRIEVAL STEP:** Fetch context using the user's query
-    # In a simple RAG, we use the global retriever
-    retrieved_docs = retriever_global.invoke(msg.content)
-    
-    # 3. **RAG LOGIC:** Format the prompt (this is often done with a LangChain chain)
-    context = "\n\n".join([doc.page_content for doc in retrieved_docs])
-    
-    prompt_template = (
-        "You are an expert assistant. Use the following context to answer the user's question. "
-        "If you don't know the answer, state that you cannot find it in the provided documents.\n\n"
-        f"Context:\n{context}\n\n"
-        f"Question: {msg.content}"
-    )
 
-    # 4. **GENERATION STEP:** Invoke the LLM with the augmented prompt
-    response = llm.invoke(prompt_template)
+    retrieved_docs = retriever_global.invoke(msg.content)
+
+    print(f"\n✅ Retrieved {len(retrieved_docs)} relevant document chunks.")
+
+    # 4. Display the content and metadata of the retrieved chunks
+    print("\n--- Retrieved Document Chunks (Context) ---")
+    for i, doc in enumerate(retrieved_docs):
+        # Print the source file path (from metadata) and a snippet of the content
+        source_file = doc.metadata.get('source', 'N/A')
+        
+        # We strip out complex metadata to make the output clean and readable
+        # (Since Docling adds a lot of rich metadata)
+        metadata_keys = ", ".join([
+            f"{k}:{v}" for k, v in doc.metadata.items() if isinstance(v, (str, int, float, bool)) and k != 'source'
+        ])
+        
+        print("-" * 40)
+        print(f"Chunk {i + 1}:")
+        print(f"  Source File: {source_file}")
+        if metadata_keys:
+            print(f"  Metadata: {metadata_keys}")
+        print(f"  Content Snippet: {doc.page_content[:200]}...")
+    
+    
     
     # 5. Send the response
-    await cl.Message(content=response.content).send()
+    # await cl.Message(content=response.content).send()
