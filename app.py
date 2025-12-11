@@ -1,11 +1,12 @@
-import chainlit as cl
 import logging
 
-from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_docling import DoclingLoader
-from langchain_milvus import Milvus
+import chainlit as cl
 from docling.chunking import HybridChunker
+
+from langchain_docling import DoclingLoader
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+from langchain_milvus import Milvus
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -41,6 +42,12 @@ async def parse_and_chunk_files(files):
         parse_msg = await cl.Message(content=f"⏳ Parsing and chunking **{f.name}**…").send()
         
         docs = await cl.make_async(load_docs_and_chunk)(f.path)
+        
+        # Update metadata to use the original filename instead of temp path
+        for doc in docs:
+            doc.metadata['source'] = f.name
+            doc.metadata['original_path'] = f.path  # Keep temp path if needed for debugging
+        
         all_chunks.extend(docs)
 
         parse_msg.content = f"✅ Finish parsing and chunking **{f.name}** → {len(docs)} document chunks" 
@@ -140,6 +147,91 @@ def log_retrieved_docs(retrieved_docs):
             logging.debug(f"  Metadata: {metadata_keys}")
         logging.debug(f"  Content Snippet: {doc.page_content[:200]}...")
 
+# Assuming 'retrieved_docs' is the list of documents from your retriever
+# e.g., retrieved_docs = [Document(page_content='...', metadata={'source': 'doc1.pdf'}), ...]
+
+def format_docs_with_sources(docs):
+    formatted_context = []
+    for i, d in enumerate(docs):
+        # Create a unique label for the source (e.g., [Source 1], [Source 2])
+        source_label = f"[{i+1}]"
+        
+        # Get the file name from metadata
+        # Common key is 'source', 'file_name', or 'id' depending on your loader
+        file_name = d.metadata.get('source', 'Unknown Source')
+        
+        # Combine the source info and the content
+        formatted_context.append(f"{source_label} (File: {file_name}):\n{d.page_content}")
+    
+    # Join all formatted chunks with a clear separator
+    return "\n\n---\n\n".join(formatted_context)
+
+
+def prompt_with_context(user_query, context_string):
+    prompt_template = """
+        SYSTEM INSTRUCTION:
+        You are an intelligent, helpful, and strictly factual question-answering assistant.
+        Your sole task is to answer the user's question ONLY based on the provided CONTEXT.
+
+        RULES:
+        1.  **Strictly Factual:** You must use the CONTEXT below to form your answer. Only use external knowledge if you are certain it is accurate and relevant.
+        2.  **Citation Required:** For every piece of information you provide, you **MUST** include the corresponding source label (e.g., [Source 1]) at the end of the sentence or paragraph where the information was drawn from.
+        3.  **Unrelated/Insufficient Context:**
+            a. If the question is clearly **unrelated** to the provided CONTEXT, state: "The question is unrelated to the provided documents."
+            b. If the question is related, but the CONTEXT **does not contain enough information** to give a complete or accurate answer, state: "I cannot answer this question based solely on the provided documents."
+        4.  **Final Summary:** After your main answer, provide a final section titled "Sources Cited" listing the full file name and source excerpt for every source label you used.
+
+        CONTEXT:
+        ---
+        {context} <-- This now includes the File Name information
+        ---
+
+        --- FEW-SHOT EXAMPLES ---
+        # Example 1: Successful Answer (Uses multiple sources)
+        USER QUESTION:
+        What is the procedure for requesting travel reimbursement and how much is the daily meal allowance?
+        ---
+        ASSISTANT RESPONSE:
+        The procedure for requesting travel reimbursement involves submitting a completed T&E form to the finance department within 10 days of the trip's completion [Source 1]. The daily meal allowance for domestic travel is set at $50 per day [Source 2].
+
+        Sources Cited:
+        File name: Policy_Travel.pdf
+        Source 1: The procedure for travel reimbursement requires submission of a T&E form within 10 days.
+        Source 2: The maximum daily meal allowance for all domestic travel is $50.
+
+        File name: Rates_2024.csv
+        Source 3: The daily meal allowance for domestic travel is $50.
+
+        # Example 2: Insufficient Context (Related question, but missing details)
+        USER QUESTION:
+        Who is the current head of the marketing department?
+        ---
+        ASSISTANT RESPONSE:
+        I cannot answer this question based solely on the provided documents.
+
+        # Example 3: Unrelated Question (Question is outside the scope of the documents)
+        USER QUESTION:
+        What is the capital of France?
+        ---
+        ASSISTANT RESPONSE:
+        The question is unrelated to the provided documents.
+
+        --- END OF EXAMPLES ---
+
+        USER QUESTION:
+        {question}
+        ---
+        
+        ASSISTANT RESPONSE:
+    """
+
+    return prompt_template.format(
+        context=context_string,
+        question=user_query
+    )
+
+
+
 @cl.on_message
 async def on_message(msg: cl.Message):
     print("The user sent:", msg.content)
@@ -152,11 +244,26 @@ async def on_message(msg: cl.Message):
     vector_store = cl.user_session.get("vector_store")
     retrieved_docs = vector_store.invoke(msg.content)
 
+    context_string = format_docs_with_sources(retrieved_docs)
+
     logging.info(f"\n✅ Retrieved {len(retrieved_docs)} relevant document chunks.")
-    log_retrieved_docs(retrieved_docs)
+    logging.info(f"--- Formatted Context String ---\n{context_string}\n")
+    # log_retrieved_docs(retrieved_docs)
 
     # Further processing with LLM and retrieved_docs can be done here
     llm = cl.user_session.get("llm")
+
+    prompt = prompt_with_context(msg.content, context_string)
+    # Create an empty message object to stream into
+    msg = cl.Message(content="")
+
+    # Stream the chunks from the LLM
+    async for chunk in llm.astream(prompt):
+        # Append the chunk content to the message object and update the UI
+        await msg.stream_token(chunk.content) 
+
+    # Once the stream is complete, finalize the message in the UI
+    await msg.send()
 
         
 
