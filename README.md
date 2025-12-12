@@ -25,6 +25,11 @@ Users can input a query into the system. Then, using the LangChain Retriever, th
 
 
 ## 3. Tech Stack
+- UI: Chainlit
+- Embedding model: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+- LLM Orchestration: LangChain
+  - Retriever https://docs.langchain.com/oss/python/integrations/retrievers
+- Vector Database: Milvus
 
 ## 4. How to run the project locally
 **Prerequisite:**
