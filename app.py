@@ -1,11 +1,17 @@
 import logging
 
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
+
 import chainlit as cl
 from docling.chunking import HybridChunker
 
 from langchain_docling import DoclingLoader
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+# from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
 from langchain_milvus import Milvus
 
 logging.basicConfig(level=logging.DEBUG)
@@ -15,6 +21,16 @@ EMBED_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 MILVUS_URI = "http://localhost:19530" 
 COLLECTION_NAME = "docling_rag_index"
 embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
+
+class SourceDocument(BaseModel):
+    """A document fragment used as a source for the answer."""
+    file_name: str = Field(description="The source file name, e.g., 'policy.pdf'.")
+    chunk_content: str = Field(description="The direct text excerpt taken from the file that supports the answer.")
+
+class StructuredAnswer(BaseModel):
+    """The final structured response from the LLM."""
+    answer: str = Field(description="The complete, conversational answer to the user's question, strictly based on the context. Use the full 'I cannot answer...' phrase for failure cases.")
+    sources_cited: List[SourceDocument] = Field(description="A list of ALL source documents used to formulate the answer. This list MUST be empty if the answer field indicates a failure (e.g., 'I cannot answer...').")
 
 
 def load_docs_and_chunk(path: str):
@@ -230,7 +246,24 @@ def prompt_with_context(user_query, context_string):
         question=user_query
     )
 
-
+# 2. Prompt Template
+RAG_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            (
+                "You are a strictly factual question-answering assistant. Your sole task is to generate a JSON object to answer the user's question ONLY based on the provided CONTEXT.\n\n"
+                "RULES:\n"
+                "1. Answer the question ONLY using the CONTEXT. Use external knowledge only to accommodate the answer such as giving recommendation.\n"
+                "2. If the question is clearly UNRELATED to the context, set the 'answer' field to: 'The question is unrelated to the provided documents.' and set 'sources_cited' to an empty list.\n"
+                "3. If the question is RELATED but there is no CONTEXT to answer, set the 'answer' field to: 'I cannot answer this question based solely on the provided documents.' and set 'sources_cited' to an empty list.\n"
+                "4. For every claim in the answer, include the supporting file name and excerpt in the 'sources_cited' list.\n\n"
+                "CONTEXT:\n---\n{context}\n---\n"
+            ),
+        ),
+        ("human", "USER QUESTION: {question}"),
+    ]
+)
 
 @cl.on_message
 async def on_message(msg: cl.Message):
@@ -250,20 +283,79 @@ async def on_message(msg: cl.Message):
     logging.info(f"--- Formatted Context String ---\n{context_string}\n")
     # log_retrieved_docs(retrieved_docs)
 
-    # Further processing with LLM and retrieved_docs can be done here
-    llm = cl.user_session.get("llm")
+    # # Further processing with LLM and retrieved_docs can be done here
+    # llm = cl.user_session.get("llm")
 
-    prompt = prompt_with_context(msg.content, context_string)
-    # Create an empty message object to stream into
-    msg = cl.Message(content="")
+    # prompt = prompt_with_context(msg.content, context_string)
+    # # Create an empty message object to stream into
+    # msg = cl.Message(content="")
 
-    # Stream the chunks from the LLM
-    async for chunk in llm.astream(prompt):
-        # Append the chunk content to the message object and update the UI
-        await msg.stream_token(chunk.content) 
+    # # Stream the chunks from the LLM
+    # async for chunk in llm.astream(prompt):
+    #     # Append the chunk content to the message object and update the UI
+    #     await msg.stream_token(chunk.content) 
 
-    # Once the stream is complete, finalize the message in the UI
-    await msg.send()
+    # # Once the stream is complete, finalize the message in the UI
+    # await msg.send()
+
+    structured_llm = llm.with_structured_output(StructuredAnswer)
+    # 2. Define the LCEL Chain
+    rag_chain = (
+        RunnablePassthrough.assign(context=lambda x: context_string)
+        | RAG_PROMPT
+        | structured_llm # Returns a StructuredAnswer Pydantic object
+    )
+
+    # 3. Invoke the chain to get the structured output (this is where the delay occurs)
+    # Since we are not using .astream, we get the validated object directly.
+    # We use cl.defer to update the UI while waiting for the LLM.
+    await cl.Message(content="Thinking...").send()
+    
+    try:
+        structured_response: StructuredAnswer = await rag_chain.ainvoke(
+            {"question": msg.content}
+        )
+    except Exception as e:
+        await cl.Message(content=f"An error occurred during structured output: {e}").send()
+        return
+
+    # 4. Format the Pydantic object into the final streaming text
+    
+    # Separate the message into the answer (streamed) and sources (element)
+    answer = structured_response.answer
+    sources_cited = structured_response.sources_cited
+    logging.info(f"\n✅ Structured Response Received:\ {structured_response}")
+
+    # Format the Answer
+    await cl.Message(content=f"**Answer:**\n{answer}").send()
+    
+    # 5. Handle Sources for the Side Panel (Traceability)
+    if sources_cited:
+        # A. Aggregate chunks by file name
+        file_excerpts: Dict[str, List[str]] = {}
+        for source in sources_cited:
+            if source.file_name not in file_excerpts:
+                file_excerpts[source.file_name] = []
+            file_excerpts[source.file_name].append(source.chunk_content)
+
+        # B. Build the final sources markdown string
+        sources_text = "### Sources Cited\n\n"
+        
+        for file_name, contents in file_excerpts.items():
+            sources_text += f"**File:** `{file_name}`\n"
+            for i, content in enumerate(contents):
+                # Using a markdown blockquote (>) is excellent for excerpts
+                sources_text += f"> **Excerpt {i+1}:** {content.strip()}\n"
+            sources_text += "\n"
+
+        # 3. SEND MESSAGE 2: The Sources
+        # We send a second message containing ONLY the source markdown.
+        # Note: You could use a different author name (e.g., "Source Bot") here if desired.
+        await cl.Message(
+            content=sources_text,
+            author="Sources" # Optional: gives the source message a distinct author name
+        ).send()
+
 
         
 
