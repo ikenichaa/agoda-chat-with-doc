@@ -30,30 +30,58 @@ async def parse_and_chunk_files(files):
         
     Returns:
         List of all document chunks across all files
+        
+    Raises:
+        ValueError: If no valid chunks could be extracted from any file
     """
     step_msg = await cl.Message(content="⏳ Step 1/2: Parsing and Chunking PDFs…").send()
     
     all_chunks = []
+    failed_files = []
+    
     for file in files:
-        # Notify user of current file processing
         file_msg = await cl.Message(content=f"⏳ Parsing and chunking **{file.name}**…").send()
         
-        # Load and chunk document
-        docs = await cl.make_async(load_docs_and_chunk)(file.path)
-        
-        # Update metadata with original filename
-        for doc in docs:
-            doc.metadata['source'] = file.name
-            doc.metadata['original_path'] = file.path
-        
-        all_chunks.extend(docs)
-        
-        # Update file processing status
-        file_msg.content = f"✅ Parsed **{file.name}** → {len(docs)} chunks"
-        await file_msg.update()
+        try:
+            # Load and chunk document
+            docs = await cl.make_async(load_docs_and_chunk)(file.path)
+            
+            if not docs:
+                logging.warning(f"No content extracted from {file.name}")
+                failed_files.append(file.name)
+                file_msg.content = f"⚠️ **{file.name}**: No content extracted"
+                await file_msg.update()
+                continue
+            
+            # Update metadata with original filename
+            for doc in docs:
+                doc.metadata['source'] = file.name
+                doc.metadata['original_path'] = file.path
+            
+            all_chunks.extend(docs)
+            
+            # Update file processing status
+            file_msg.content = f"✅ Parsed **{file.name}** → {len(docs)} chunks"
+            await file_msg.update()
+            logging.info(f"Successfully processed {file.name}: {len(docs)} chunks")
+            
+        except Exception as e:
+            logging.error(f"Failed to process {file.name}: {str(e)}", exc_info=True)
+            failed_files.append(file.name)
+            file_msg.content = f"❌ **{file.name}**: Failed to process"
+            await file_msg.update()
+    
+    # Check if we got any chunks
+    if not all_chunks:
+        error_msg = f"Failed to extract content from all files: {', '.join(failed_files)}"
+        logging.error(error_msg)
+        raise ValueError(error_msg)
     
     # Update overall progress
-    step_msg.content = f"✅ Step 1/2: Parsing complete. Total chunks: {len(all_chunks)}"
+    status = f"✅ Step 1/2: Parsing complete. Total chunks: {len(all_chunks)}"
+    if failed_files:
+        status += f" (Failed: {', '.join(failed_files)})"
+    step_msg.content = status
     await step_msg.update()
     
     # Log sample chunks for debugging
@@ -79,23 +107,48 @@ async def ingest_to_vectorstore(chunks):
         
     Returns:
         Configured Milvus vector store instance
+        
+    Raises:
+        ConnectionError: If cannot connect to Milvus
+        ValueError: If chunks list is empty
     """
+    if not chunks:
+        raise ValueError("Cannot ingest empty chunks list")
+    
     step_msg = await cl.Message(content="⏳ Step 2/2: Ingesting chunks into vector store…").send()
     
-    # Initialize embedding model
-    embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
-    
-    # Create vector store
-    vectorstore = await cl.make_async(Milvus.from_documents)(
-        documents=chunks,
-        embedding=embedding,
-        collection_name=COLLECTION_NAME,
-        connection_args={"uri": MILVUS_URI},
-        index_params=MILVUS_INDEX_PARAMS,
-        drop_old=True,
-    )
-    
-    step_msg.content = f"✅ Step 2/2: Ingested {len(chunks)} chunks successfully."
-    await step_msg.update()
-    
-    return vectorstore
+    try:
+        # Initialize embedding model
+        logging.info(f"Initializing embedding model: {EMBED_MODEL_ID}")
+        embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
+        
+        # Create vector store
+        logging.info(f"Connecting to Milvus at {MILVUS_URI}")
+        vectorstore = await cl.make_async(Milvus.from_documents)(
+            documents=chunks,
+            embedding=embedding,
+            collection_name=COLLECTION_NAME,
+            connection_args={"uri": MILVUS_URI},
+            index_params=MILVUS_INDEX_PARAMS,
+            drop_old=True,
+        )
+        
+        step_msg.content = f"✅ Step 2/2: Ingested {len(chunks)} chunks successfully."
+        await step_msg.update()
+        logging.info(f"Successfully created vector store with {len(chunks)} chunks")
+        
+        return vectorstore
+        
+    except ConnectionError as e:
+        error_msg = f"Failed to connect to Milvus at {MILVUS_URI}: {str(e)}"
+        logging.error(error_msg, exc_info=True)
+        step_msg.content = "❌ Step 2/2: Failed to connect to vector store."
+        await step_msg.update()
+        raise ConnectionError(error_msg) from e
+        
+    except Exception as e:
+        error_msg = f"Failed to ingest chunks to vector store: {str(e)}"
+        logging.error(error_msg, exc_info=True)
+        step_msg.content = "❌ Step 2/2: Failed to ingest chunks."
+        await step_msg.update()
+        raise

@@ -4,6 +4,7 @@ import chainlit as cl
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from config import LLM_MODEL_NAME, RETRIEVAL_TOP_K
+from error_handler import ErrorHandler
 from indexing import ingest_to_vectorstore, parse_and_chunk_files
 from retrieval import format_sources_for_display, get_rag_response
 
@@ -23,25 +24,34 @@ async def start():
             max_files=3
         ).send()
 
-    # Process files
+    logging.info(f"Received {len(files)} file(s) for processing")
+    
     processing_msg = await cl.Message(
         content=f"⏳ Received {len(files)} file(s). Processing…"
     ).send()
 
-    all_chunks = await parse_and_chunk_files(files)
-    vector_store = await ingest_to_vectorstore(all_chunks)
+    try:
+        # Process files
+        all_chunks = await parse_and_chunk_files(files)
+        vector_store = await ingest_to_vectorstore(all_chunks)
 
-    processing_msg.content = "✅ All processing complete!"
-    await processing_msg.update()
+        processing_msg.content = "✅ All processing complete!"
+        await processing_msg.update()
 
-    # Initialize and store session components
-    retriever = vector_store.as_retriever(search_kwargs={"k": RETRIEVAL_TOP_K})
-    llm = ChatGoogleGenerativeAI(model=LLM_MODEL_NAME)
-    
-    cl.user_session.set("vector_store", retriever)
-    cl.user_session.set("llm", llm)
-    
-    await cl.Message(content="Setup complete! Ready to chat.").send()
+        # Initialize and store session components
+        retriever = vector_store.as_retriever(search_kwargs={"k": RETRIEVAL_TOP_K})
+        llm = ChatGoogleGenerativeAI(model=LLM_MODEL_NAME)
+        
+        cl.user_session.set("vector_store", retriever)
+        cl.user_session.set("llm", llm)
+        
+        logging.info("Chat session initialized successfully")
+        await cl.Message(content="Setup complete! Ready to chat.").send()
+        
+    except (ValueError, ConnectionError, Exception) as e:
+        await ErrorHandler.handle_error(e, "setup", show_details=isinstance(e, ValueError))
+        processing_msg.content = ErrorHandler.get_error_message(e)
+        await processing_msg.update()
 
 
 @cl.on_message
@@ -53,10 +63,16 @@ async def on_message(msg: cl.Message):
     retriever = cl.user_session.get("vector_store")
     
     if llm is None or retriever is None:
-        await cl.Message(content="System not initialized. Please wait for setup to complete.").send()
+        logging.warning("User attempted to send message before initialization")
+        await cl.Message(content="⚠️ System not initialized. Please wait for setup to complete.").send()
         return
     
-    await cl.Message(content="Thinking...").send()
+    if not msg.content or not msg.content.strip():
+        await cl.Message(content="⚠️ Please provide a question.").send()
+        return
+    
+    logging.info(f"Processing user message: {msg.content[:100]}...")
+    await cl.Message(content="🤔 Thinking...").send()
     
     try:
         # Execute RAG pipeline
@@ -69,9 +85,11 @@ async def on_message(msg: cl.Message):
         sources_text = format_sources_for_display(response['sources_cited'])
         if sources_text:
             await cl.Message(content=sources_text).send()
+        
+        logging.info("Response sent successfully")
     
-    except Exception as e:
-        await cl.Message(content=f"An error occurred: {e}").send()
+    except (ValueError, ConnectionError, Exception) as e:
+        await ErrorHandler.handle_error(e, "message processing", show_details=isinstance(e, ValueError))
 
 
         
