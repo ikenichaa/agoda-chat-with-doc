@@ -1,7 +1,7 @@
 import logging
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict
 
 import chainlit as cl
 from docling.chunking import HybridChunker
@@ -9,7 +9,6 @@ from docling.chunking import HybridChunker
 from langchain_docling import DoclingLoader
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-# from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_milvus import Milvus
@@ -21,6 +20,25 @@ EMBED_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 MILVUS_URI = "http://localhost:19530" 
 COLLECTION_NAME = "docling_rag_index"
 embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL_ID)
+LLM_MODEL_NAME = "gemini-2.5-flash-lite"
+
+RAG_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            (
+                "You are a strictly factual question-answering assistant. Your sole task is to generate a JSON object to answer the user's question ONLY based on the provided CONTEXT.\n\n"
+                "RULES:\n"
+                "1. Answer the question ONLY using the CONTEXT. Use external knowledge only to accommodate the answer such as giving recommendation.\n"
+                "2. If the question is clearly UNRELATED to the context, set the 'answer' field to: 'The question is unrelated to the provided documents.' and set 'sources_cited' to an empty list.\n"
+                "3. If the question is RELATED but there is no CONTEXT to answer, set the 'answer' field to: 'I cannot answer this question based solely on the provided documents.' and set 'sources_cited' to an empty list.\n"
+                "4. For every claim in the answer, include the supporting file name and excerpt in the 'sources_cited' list.\n\n"
+                "CONTEXT:\n---\n{context}\n---\n"
+            ),
+        ),
+        ("human", "USER QUESTION: {question}"),
+    ]
+)
 
 class SourceDocument(BaseModel):
     """A document fragment used as a source for the answer."""
@@ -123,6 +141,7 @@ async def start():
 
     # Step 1: Parse and chunk
     all_chunks = await parse_and_chunk_files(files)
+    cl.user_session.set("all_chunks", all_chunks)
 
     # Step 2: Ingest to vector store
     vector_store = await ingest_to_vectorstore(all_chunks)
@@ -134,7 +153,7 @@ async def start():
     cl.user_session.set("vector_store", vector_store.as_retriever(search_kwargs={"k": 5}))
     
     # Initialize the LLM and store in user session
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
+    llm = ChatGoogleGenerativeAI(model=LLM_MODEL_NAME)
     cl.user_session.set("llm", llm)
     
     # Notify user that setup is complete
@@ -163,13 +182,17 @@ def log_retrieved_docs(retrieved_docs):
             logging.debug(f"  Metadata: {metadata_keys}")
         logging.debug(f"  Content Snippet: {doc.page_content[:200]}...")
 
-# Assuming 'retrieved_docs' is the list of documents from your retriever
-# e.g., retrieved_docs = [Document(page_content='...', metadata={'source': 'doc1.pdf'}), ...]
 
 def format_docs_with_sources(docs):
+    """
+    format_docs_with_sources prepares the retrieved documents into a formatted string with source labels
+    
+    :param docs: List of document chunks to format
+    ex: [Document(page_content='...', metadata={'source': 'doc1.pdf'}), ...]
+    """
     formatted_context = []
     for i, d in enumerate(docs):
-        # Create a unique label for the source (e.g., [Source 1], [Source 2])
+        # Create a unique label for the source (e.g., [1], [2])
         source_label = f"[{i+1}]"
         
         # Get the file name from metadata
@@ -183,87 +206,6 @@ def format_docs_with_sources(docs):
     return "\n\n---\n\n".join(formatted_context)
 
 
-def prompt_with_context(user_query, context_string):
-    prompt_template = """
-        SYSTEM INSTRUCTION:
-        You are an intelligent, helpful, and strictly factual question-answering assistant.
-        Your sole task is to answer the user's question ONLY based on the provided CONTEXT.
-
-        RULES:
-        1.  **Strictly Factual:** You must use the CONTEXT below to form your answer. Only use external knowledge if you are certain it is accurate and relevant.
-        2.  **Citation Required:** For every piece of information you provide, you **MUST** include the corresponding source label (e.g., [Source 1]) at the end of the sentence or paragraph where the information was drawn from.
-        3.  **Unrelated/Insufficient Context:**
-            a. If the question is clearly **unrelated** to the provided CONTEXT, state: "The question is unrelated to the provided documents."
-            b. If the question is related, but the CONTEXT **does not contain enough information** to give a complete or accurate answer, state: "I cannot answer this question based solely on the provided documents."
-        4.  **Final Summary:** After your main answer, provide a final section titled "Sources Cited" listing the full file name and source excerpt for every source label you used.
-
-        CONTEXT:
-        ---
-        {context} <-- This now includes the File Name information
-        ---
-
-        --- FEW-SHOT EXAMPLES ---
-        # Example 1: Successful Answer (Uses multiple sources)
-        USER QUESTION:
-        What is the procedure for requesting travel reimbursement and how much is the daily meal allowance?
-        ---
-        ASSISTANT RESPONSE:
-        The procedure for requesting travel reimbursement involves submitting a completed T&E form to the finance department within 10 days of the trip's completion [Source 1]. The daily meal allowance for domestic travel is set at $50 per day [Source 2].
-
-        Sources Cited:
-        File name: Policy_Travel.pdf
-        Source 1: The procedure for travel reimbursement requires submission of a T&E form within 10 days.
-        Source 2: The maximum daily meal allowance for all domestic travel is $50.
-
-        File name: Rates_2024.csv
-        Source 3: The daily meal allowance for domestic travel is $50.
-
-        # Example 2: Insufficient Context (Related question, but missing details)
-        USER QUESTION:
-        Who is the current head of the marketing department?
-        ---
-        ASSISTANT RESPONSE:
-        I cannot answer this question based solely on the provided documents.
-
-        # Example 3: Unrelated Question (Question is outside the scope of the documents)
-        USER QUESTION:
-        What is the capital of France?
-        ---
-        ASSISTANT RESPONSE:
-        The question is unrelated to the provided documents.
-
-        --- END OF EXAMPLES ---
-
-        USER QUESTION:
-        {question}
-        ---
-        
-        ASSISTANT RESPONSE:
-    """
-
-    return prompt_template.format(
-        context=context_string,
-        question=user_query
-    )
-
-# 2. Prompt Template
-RAG_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            (
-                "You are a strictly factual question-answering assistant. Your sole task is to generate a JSON object to answer the user's question ONLY based on the provided CONTEXT.\n\n"
-                "RULES:\n"
-                "1. Answer the question ONLY using the CONTEXT. Use external knowledge only to accommodate the answer such as giving recommendation.\n"
-                "2. If the question is clearly UNRELATED to the context, set the 'answer' field to: 'The question is unrelated to the provided documents.' and set 'sources_cited' to an empty list.\n"
-                "3. If the question is RELATED but there is no CONTEXT to answer, set the 'answer' field to: 'I cannot answer this question based solely on the provided documents.' and set 'sources_cited' to an empty list.\n"
-                "4. For every claim in the answer, include the supporting file name and excerpt in the 'sources_cited' list.\n\n"
-                "CONTEXT:\n---\n{context}\n---\n"
-            ),
-        ),
-        ("human", "USER QUESTION: {question}"),
-    ]
-)
 
 @cl.on_message
 async def on_message(msg: cl.Message):
@@ -281,22 +223,7 @@ async def on_message(msg: cl.Message):
 
     logging.info(f"\n✅ Retrieved {len(retrieved_docs)} relevant document chunks.")
     logging.info(f"--- Formatted Context String ---\n{context_string}\n")
-    # log_retrieved_docs(retrieved_docs)
-
-    # # Further processing with LLM and retrieved_docs can be done here
-    # llm = cl.user_session.get("llm")
-
-    # prompt = prompt_with_context(msg.content, context_string)
-    # # Create an empty message object to stream into
-    # msg = cl.Message(content="")
-
-    # # Stream the chunks from the LLM
-    # async for chunk in llm.astream(prompt):
-    #     # Append the chunk content to the message object and update the UI
-    #     await msg.stream_token(chunk.content) 
-
-    # # Once the stream is complete, finalize the message in the UI
-    # await msg.send()
+    log_retrieved_docs(retrieved_docs)
 
     structured_llm = llm.with_structured_output(StructuredAnswer)
     # 2. Define the LCEL Chain
@@ -307,8 +234,6 @@ async def on_message(msg: cl.Message):
     )
 
     # 3. Invoke the chain to get the structured output (this is where the delay occurs)
-    # Since we are not using .astream, we get the validated object directly.
-    # We use cl.defer to update the UI while waiting for the LLM.
     await cl.Message(content="Thinking...").send()
     
     try:
@@ -320,14 +245,13 @@ async def on_message(msg: cl.Message):
         return
 
     # 4. Format the Pydantic object into the final streaming text
-    
     # Separate the message into the answer (streamed) and sources (element)
     answer = structured_response.answer
     sources_cited = structured_response.sources_cited
     logging.info(f"\n✅ Structured Response Received:\ {structured_response}")
 
-    # Format the Answer
-    await cl.Message(content=f"**Answer:**\n{answer}").send()
+    # Send the Answer
+    await cl.Message(content=f"**Answer**:\n{answer}").send()
     
     # 5. Handle Sources for the Side Panel (Traceability)
     if sources_cited:
@@ -339,7 +263,7 @@ async def on_message(msg: cl.Message):
             file_excerpts[source.file_name].append(source.chunk_content)
 
         # B. Build the final sources markdown string
-        sources_text = "### Sources Cited\n\n"
+        sources_text = "**Sources Cited**:\n\n"
         
         for file_name, contents in file_excerpts.items():
             sources_text += f"**File:** `{file_name}`\n"
@@ -348,12 +272,9 @@ async def on_message(msg: cl.Message):
                 sources_text += f"> **Excerpt {i+1}:** {content.strip()}\n"
             sources_text += "\n"
 
-        # 3. SEND MESSAGE 2: The Sources
-        # We send a second message containing ONLY the source markdown.
-        # Note: You could use a different author name (e.g., "Source Bot") here if desired.
+        # Send the cited source
         await cl.Message(
             content=sources_text,
-            author="Sources" # Optional: gives the source message a distinct author name
         ).send()
 
 
