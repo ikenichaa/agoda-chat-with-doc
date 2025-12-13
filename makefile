@@ -26,6 +26,20 @@ clean: ## Clean up containers and volumes
 	docker compose down -v
 	rm -rf volumes/
 
-test: ## Run tests (placeholder)
-	@echo "Running tests..."
-	uv run pytest tests/ || echo "No tests configured yet"
+test: ## Run all tests
+	uv run pytest
+
+test-verbose: ## Run tests with verbose output
+	uv run pytest -v
+
+test-coverage: ## Run tests with coverage report
+	uv run pytest --cov=. --cov-report=html --cov-report=term
+
+test-watch: ## Run tests in watch mode
+	uv run pytest-watch
+
+format: ## Format code with black and isort
+	@echo "Formatting code..."
+	@command -v black >/dev/null 2>&1 || { echo "black not installed"; exit 1; }
+	uv run black .
+	uv run isort .
