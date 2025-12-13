@@ -31,37 +31,136 @@ Users can input a query into the system. Then, using the LangChain Retriever, th
   - Retriever https://docs.langchain.com/oss/python/integrations/retrievers
 - Vector Database: Milvus
 
-## 4. How to run the project locally
-**Prerequisite:**
-- Having Docker and uv installed in your local computer
+## 4. How to run the project
 
-**Sync the package**
-```
-uv sync
+### Option 1: Run with Docker (Recommended)
+
+**Prerequisites:**
+- Docker and Docker Compose installed
+
+**Steps:**
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd agoda-chat-with-doc
+   ```
+
+2. **Create .env file**
+   ```bash
+   cp .env.example .env
+   # Add your GOOGLE_API_KEY to .env
+   ```
+   
+   Get your free API key from [Google AI Studio](https://aistudio.google.com/api-keys)
+
+3. **Start all services**
+   ```bash
+   docker compose up -d
+   ```
+
+4. **Access the application**
+   - App: http://localhost:8000
+   - Milvus UI: http://localhost:9091/webui/
+
+5. **View logs**
+   ```bash
+   docker compose logs -f app
+   ```
+
+6. **Stop services**
+   ```bash
+   docker compose down
+   ```
+
+### Option 2: Run Locally (Development)
+
+**Prerequisites:**
+- Python 3.11+
+- Docker (for Milvus only)
+- uv package manager
+
+**Steps:**
+
+1. **Install dependencies**
+   ```bash
+   uv sync
+   source .venv/bin/activate
+   ```
+
+2. **Start Milvus**
+   ```bash
+   docker compose up -d etcd minio standalone
+   ```
+
+3. **Create .env file**
+   ```bash
+   cp .env.example .env
+   # Add your GOOGLE_API_KEY
+   ```
+
+4. **Run the app**
+   ```bash
+   chainlit run app.py --watch
+   ```
+
+5. **Access**: http://localhost:8000
+
+## 5. Deployment
+
+### Docker Image
+The application is containerized and can be deployed to any platform supporting Docker:
+
+**Build image:**
+```bash
+docker build -t agoda-chat-app .
 ```
 
-**Activate the virtual env**
-```
-source .venv/bin/activate
-```
-
-**Start Milvus with Docker**
-```
-docker compose up -d
-```
-When the docker starts, you can access Milvus web UI here: http://127.0.0.1:9091/webui/
-
-**Add the env into .env file**
-- GEMINI_API_KEY
-
-Noted that you can create a project and get the GEMINI_API_KEY for free with limited number of query from [here](https://aistudio.google.com/api-keys).
-
-**Start the chainlit application**
-```
-chainlit run app.py --watch
+**Run container:**
+```bash
+docker run -p 8000:8000 \
+  -e GEMINI_API_KEY=your_key \
+  -e MILVUS_URI=http://milvus:19530 \
+  agoda-chat-app
 ```
 
-## 5. Deployment plan
+### CI/CD Pipeline
+GitHub Actions workflow included (`.github/workflows/ci-cd.yml`):
+- ✅ Automated testing on push
+- ✅ Docker image build and push to GitHub Container Registry
+- ✅ Production deployment (manual approval required)
+
+### Cloud Deployment Options
+
+**Google Cloud Run:**
+```bash
+gcloud run deploy agoda-chat-app \
+  --image gcr.io/your-project/agoda-chat-app \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated
+```
+
+**AWS ECS/Fargate:**
+```bash
+# Use provided Dockerfile
+aws ecs create-service --cluster your-cluster \
+  --service-name agoda-chat-app \
+  --task-definition agoda-chat-app
+```
+
+**Azure Container Apps:**
+```bash
+az containerapp create \
+  --name agoda-chat-app \
+  --resource-group your-rg \
+  --image your-registry/agoda-chat-app
+```
+
+### Quick Deploy Script
+```bash
+./deploy.sh
+```
 
 ## 6. Limitation and future development
 

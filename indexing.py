@@ -2,12 +2,27 @@ import logging
 
 import chainlit as cl
 from docling.chunking import HybridChunker
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from langchain_docling import DoclingLoader
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 
 from config import COLLECTION_NAME, EMBED_MODEL_ID, MILVUS_INDEX_PARAMS, MILVUS_URI
 
+# Configure PDF pipeline without OCR (only for text-based PDFs)
+pipeline_options = PdfPipelineOptions()
+pipeline_options.allow_external_plugins = True
+pipeline_options.do_ocr = False  # Disable OCR completely
+
+doc_converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(
+            pipeline_options=pipeline_options
+        )
+    }
+)
 
 def load_docs_and_chunk(path: str):
     """Load and chunk a document using Docling with HybridChunker.
@@ -18,8 +33,20 @@ def load_docs_and_chunk(path: str):
     Returns:
         List of chunked document objects
     """
-    loader = DoclingLoader(path, chunker=HybridChunker(tokenizer=EMBED_MODEL_ID))
-    return loader.load()
+    try:
+        logging.info(f"Creating DoclingLoader for {path}")
+        loader = DoclingLoader(
+            path, 
+            chunker=HybridChunker(tokenizer=EMBED_MODEL_ID),
+            converter=doc_converter
+        )
+        logging.info(f"DoclingLoader created, starting to load document...")
+        docs = loader.load()
+        logging.info(f"Successfully loaded {len(docs)} chunks from {path}")
+        return docs
+    except Exception as e:
+        logging.error(f"Error loading document from {path}: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise
 
 
 async def parse_and_chunk_files(files):

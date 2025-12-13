@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Chainlit
+.chainlit/
+.files/
+
+# Documentation
+README.md
+images/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Milvus volumes
+volumes/
+
+# Misc
+*.log
+.DS_Store

@@ -1,5 +1,3 @@
-version: '3.5'
-
 services:
   etcd:
     container_name: milvus-etcd
@@ -60,6 +58,39 @@ services:
     depends_on:
       - "etcd"
       - "minio"
+
+  app:
+    container_name: agoda-chat-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MILVUS_URI=http://standalone:19530
+      - EMBED_MODEL_ID=sentence-transformers/all-MiniLM-L6-v2
+      - LLM_MODEL_NAME=gemini-2.5-flash-lite
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - HF_HOME=/app/.cache/huggingface
+      - TORCH_HOME=/app/.cache/torch
+    volumes:
+      # Development: Mount source code for hot reload
+      - ./app.py:/app/app.py
+      - ./config.py:/app/config.py
+      - ./indexing.py:/app/indexing.py
+      - ./retrieval.py:/app/retrieval.py
+      - ./schema.py:/app/schema.py
+      - ./error_handler.py:/app/error_handler.py
+      - ./chainlit.md:/app/chainlit.md
+      # Persistent data directories
+      - ./.chainlit:/app/.chainlit
+      - ./.files:/app/.files
+      # Model cache to avoid redownloading
+      - ./.cache:/app/.cache
+    depends_on:
+      standalone:
+        condition: service_healthy
+    restart: unless-stopped
 
 networks:
   default:
