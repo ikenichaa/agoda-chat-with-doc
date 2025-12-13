@@ -74,18 +74,12 @@ services:
       - HF_HOME=/app/.cache/huggingface
       - TORCH_HOME=/app/.cache/torch
     volumes:
-      # Development: Mount source code for hot reload
-      - ./app.py:/app/app.py
-      - ./config.py:/app/config.py
-      - ./indexing.py:/app/indexing.py
-      - ./retrieval.py:/app/retrieval.py
-      - ./schema.py:/app/schema.py
-      - ./error_handler.py:/app/error_handler.py
-      - ./chainlit.md:/app/chainlit.md
-      # Persistent data directories
-      - ./.chainlit:/app/.chainlit
-      - ./.files:/app/.files
-      # Model cache to avoid redownloading
+      # Development: Mount entire project for hot reload
+      - .:/app
+      # Exclude virtual environment and cache
+      - /app/.venv
+      - /app/__pycache__
+      # Cache models to avoid re-downloading (uses 2-5GB disk space)
       - ./.cache:/app/.cache
     depends_on:
       standalone:

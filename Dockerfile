@@ -4,13 +4,11 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies required by some packages
-# Including Tesseract OCR and OpenGL libraries for Docling
+# Install system dependencies required by Docling
+# OpenGL libraries needed for OpenCV/image processing
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    tesseract-ocr \
-    tesseract-ocr-eng \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
