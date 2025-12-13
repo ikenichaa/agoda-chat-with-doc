@@ -26,16 +26,6 @@ clean: ## Clean up containers and volumes
 	docker compose down -v
 	rm -rf volumes/
 
-deploy: ## Deploy the application
-	./deploy.sh
-
 test: ## Run tests (placeholder)
 	@echo "Running tests..."
 	uv run pytest tests/ || echo "No tests configured yet"
-
-lint: ## Run linter
-	uv run ruff check .
-
-format: ## Format code
-	uv run ruff format .
-
