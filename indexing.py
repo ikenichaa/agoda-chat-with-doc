@@ -9,7 +9,13 @@ from langchain_docling import DoclingLoader
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 
-from config import COLLECTION_NAME, EMBED_MODEL_ID, MILVUS_INDEX_PARAMS, MILVUS_URI
+from config import (
+    CHUNK_MAX_TOKENS,
+    COLLECTION_NAME,
+    EMBED_MODEL_ID,
+    MILVUS_INDEX_PARAMS,
+    MILVUS_URI,
+)
 
 # Configure PDF pipeline without OCR (only for text-based PDFs)
 pipeline_options = PdfPipelineOptions()
@@ -27,6 +33,10 @@ doc_converter = DocumentConverter(
 def load_docs_and_chunk(path: str):
     """Load and chunk a document using Docling with HybridChunker.
     
+    The chunker is configured to respect the embedding model's token limit:
+    - all-MiniLM-L6-v2 has a max sequence length of 512 tokens
+    - We use max_tokens=450 to leave buffer for special tokens
+    
     Args:
         path: Path to the document file
         
@@ -37,7 +47,10 @@ def load_docs_and_chunk(path: str):
         logging.info(f"Creating DoclingLoader for {path}")
         loader = DoclingLoader(
             path, 
-            chunker=HybridChunker(tokenizer=EMBED_MODEL_ID),
+            chunker=HybridChunker(
+                tokenizer=EMBED_MODEL_ID,
+                max_tokens=CHUNK_MAX_TOKENS,
+            ),
             converter=doc_converter
         )
         logging.info(f"DoclingLoader created, starting to load document...")

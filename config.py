@@ -9,6 +9,11 @@ load_dotenv()
 EMBED_MODEL_ID = os.getenv("EMBED_MODEL_ID", "sentence-transformers/all-MiniLM-L6-v2")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash-lite")
 
+# Chunking Settings
+# all-MiniLM-L6-v2 has max_seq_length of 512 tokens
+# Use 450 to leave buffer for special tokens ([CLS], [SEP], etc.)
+CHUNK_MAX_TOKENS = 450
+
 # Vector Store Settings
 MILVUS_URI = os.getenv("MILVUS_URI", "http://localhost:19530")
 COLLECTION_NAME = "docling_rag_index"
