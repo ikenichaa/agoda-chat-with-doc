@@ -31,7 +31,6 @@ doc_converter = DocumentConverter(
     format_options={
         InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_pipeline_options),
         InputFormat.DOCX: WordFormatOption(),  # Word documents
-        InputFormat.XLSX: WordFormatOption(),  # Excel (uses same option as Word)
     }
 )
 

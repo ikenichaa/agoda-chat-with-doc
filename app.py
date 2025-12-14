@@ -28,12 +28,10 @@ async def start():
     files = None
     while files is None:
         files = await cl.AskFileMessage(
-            content="Please upload 1 to 3 documents to begin!\n\n**Supported formats:** PDF, Word (.docx), Excel (.xlsx), Text (.txt)",
+            content="Please upload 1 to 3 documents to begin!\n\n**Supported formats:** PDF, Word (.docx)\n\n**Noted:** Running for the first time may take a while",
             accept=[
                 "application/pdf",                                                      # PDF
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",         # .xlsx
-                "text/plain",                                                           # .txt
             ],
             max_files=3
         ).send()
