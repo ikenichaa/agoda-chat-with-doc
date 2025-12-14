@@ -6,9 +6,8 @@ This project is a web application that allows users to upload multiple text docu
 
 ## 2. Demo
 
-<video src="./demo/demo.mov" controls="controls" width="100%">
-    Your browser does not support the video tag.
-</video>
+![demo_img](./images/demo_img.png)
+For a video demo, please follow this [link](https://drive.google.com/file/d/1Tj_u6Y0d37FF8e-B12GRySaQETG0LI0g/view?usp=sharing)
 
 ## 3. How to run the project
 
