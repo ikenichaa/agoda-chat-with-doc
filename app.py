@@ -1,4 +1,15 @@
 import logging
+import sys
+
+# Configure logging BEFORE any other imports
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ],
+    force=True  # Force reconfiguration even if already configured
+)
 
 import chainlit as cl
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -7,8 +18,6 @@ from config import LLM_MODEL_NAME, RETRIEVAL_TOP_K
 from error_handler import ErrorHandler
 from indexing import ingest_to_vectorstore, parse_and_chunk_files
 from retrieval import format_sources_for_display, get_rag_response
-
-logging.basicConfig(level=logging.DEBUG)
 
 
 @cl.on_chat_start
@@ -19,8 +28,13 @@ async def start():
     files = None
     while files is None:
         files = await cl.AskFileMessage(
-            content="Please upload 1 to 3 PDF files to begin!",
-            accept=["application/pdf"],
+            content="Please upload 1 to 3 documents to begin!\n\n**Supported formats:** PDF, Word (.docx), Excel (.xlsx), Text (.txt)",
+            accept=[
+                "application/pdf",                                                      # PDF
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",         # .xlsx
+                "text/plain",                                                           # .txt
+            ],
             max_files=3
         ).send()
 
