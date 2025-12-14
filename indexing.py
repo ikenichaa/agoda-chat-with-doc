@@ -4,7 +4,11 @@ import chainlit as cl
 from docling.chunking import HybridChunker
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.document_converter import (
+    DocumentConverter,
+    PdfFormatOption,
+    WordFormatOption,
+)
 from langchain_docling import DoclingLoader
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
@@ -17,16 +21,17 @@ from config import (
     MILVUS_URI,
 )
 
-# Configure PDF pipeline without OCR (only for text-based PDFs)
-pipeline_options = PdfPipelineOptions()
-pipeline_options.allow_external_plugins = True
-pipeline_options.do_ocr = False  # Disable OCR completely
+# Configure pipeline options for different document formats
+pdf_pipeline_options = PdfPipelineOptions()
+pdf_pipeline_options.allow_external_plugins = True
+pdf_pipeline_options.do_ocr = False  # Disable OCR (only for text-based PDFs)
 
+# Create document converter with support for multiple formats
 doc_converter = DocumentConverter(
     format_options={
-        InputFormat.PDF: PdfFormatOption(
-            pipeline_options=pipeline_options
-        )
+        InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_pipeline_options),
+        InputFormat.DOCX: WordFormatOption(),  # Word documents
+        InputFormat.XLSX: WordFormatOption(),  # Excel (uses same option as Word)
     }
 )
 
@@ -63,7 +68,9 @@ def load_docs_and_chunk(path: str):
 
 
 async def parse_and_chunk_files(files):
-    """Parse and chunk uploaded PDF files into document chunks.
+    """Parse and chunk uploaded documents into document chunks.
+    
+    Supports PDF, Word (.docx), Excel (.xlsx), and plain text (.txt) files.
     
     Args:
         files: List of uploaded file objects from Chainlit
@@ -74,7 +81,7 @@ async def parse_and_chunk_files(files):
     Raises:
         ValueError: If no valid chunks could be extracted from any file
     """
-    step_msg = await cl.Message(content="⏳ Step 1/2: Parsing and Chunking PDFs…").send()
+    step_msg = await cl.Message(content="⏳ Step 1/2: Parsing and Chunking documents…").send()
     
     all_chunks = []
     failed_files = []
