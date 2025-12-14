@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-This project is a web application that allows users to upload multiple text documents and ask document-related questions of the system. The system is able to answer user queries and provide an excerpt from the paragraph that contains the answer.
+This project is a web application that allows users to upload upto 3 text documents (PDF, word) and ask document-related questions of the system. The system is able to answer user queries and provide an excerpt from the paragraph that contains the answer.
 
 ## 2. Demo
 
@@ -152,4 +152,18 @@ agoda-chat-with-doc/
 └── .files/                  # Temporary uploaded files storage
 ```
 
-## 7. Limitation and future development
+## 7. Limitations and future development
+
+This web application is a proof-of-concept RAG system that accepts text documents and extracts information based on user queries. There are many limitations that can be enhanced, including:
+
+1. **Cannot add more documents on the fly:** currently, the system does not support incremental document ingestion. If this feature is required, users could upload additional files and trigger re-indexing to add new content to the vector database for retrieval.
+2. **Limited number of text file input:** currently, the system supports only PDF and Word documents. Although their internal structures differ, both formats are well supported by the document parsing pipeline used in this project. Extending the accepted file types would require additional effort to identify suitable extraction strategies for each format and to validate the correctness of the extracted content.
+3. **Streaming capability:** the system uses Pydantic to enforce structured JSON output from the LLM, ensuring that each response includes both the answer and the cited source. As a result, response streaming is not supported.
+4. **Context awareness:** the LLM does not maintain conversational state and does not keep track of previous queries and responses. For future development, an additional LLM pipeline could be introduced to summarise queries and responses, cache them to avoid repeated retrieval from the vector database, and provide conversational context by injecting the conversation summary into subsequent prompts.
+5. **Metrics and observability:**
+
+- **Add latency logging:** the time spent on indexing, retrieving, and the end-to-end user query and response.
+- **Token logging:** log the input and output tokens to track trends in system usage costs.
+- **Error notifications:** send the error exception to Sentry.
+- **Grafana:** Build a dashboard to visualise the system usage and errors.
+- **Feedback loop:** Include a like or dislike button to gather user feedback on the system response. Keep track of the feedback to improve the system.
