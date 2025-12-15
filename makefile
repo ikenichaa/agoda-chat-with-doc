@@ -5,6 +5,9 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 install: ## Install dependencies with uv
+	uv sync --all-extras
+
+install-prod: ## Install production dependencies only
 	uv sync
 
 run: ## Run the app locally (development)
@@ -27,16 +30,13 @@ clean: ## Clean up containers and volumes
 	rm -rf volumes/
 
 test: ## Run all tests
-	uv run pytest
+	uv run --extra dev pytest
 
 test-verbose: ## Run tests with verbose output
-	uv run pytest -v
+	uv run --extra dev pytest -v
 
 test-coverage: ## Run tests with coverage report
-	uv run pytest --cov=. --cov-report=html --cov-report=term
-
-test-watch: ## Run tests in watch mode
-	uv run pytest-watch
+	uv run --extra dev pytest --cov=. --cov-report=html --cov-report=term
 
 format: ## Format code with black and isort
 	@echo "Formatting code..."
